@@ -218,7 +218,6 @@ def train(train_loader, model, loss_fun, optimiser, epoch):
 
     def compute_loss(x_, next_x, y_, state_, periodic=False):
         nonlocal previous_mismatch  # write access to variables of the enclosing function
-        if not periodic: selective_zero(state, mismatch, forward=False)  # no grad to the past
         (x_hat, state_), (_, idx) = model(V(x_), state_)
         selective_zero(state, mismatch)  # no state to the future, no grad from the future
         selective_match(x_hat.data, next_x, mismatch + previous_mismatch)  # last frame or first frame
@@ -250,12 +249,16 @@ def train(train_loader, model, loss_fun, optimiser, epoch):
         # BTT loop
         if from_past:
             mismatch = y[0] != from_past[1]
-            ce_loss, mse_loss, state, _ = compute_loss(from_past[0], x[0], from_past[1], state, periodic=True)
-            loss += mse_loss * args.mu + ce_loss[0] * args.lambda_ + ce_loss[1] * args.pi
+            ce_loss, mse_loss, state, _ = compute_loss(from_past[0], x[0], from_past[1], state)
+            loss += mse_loss * args.mu + ce_loss * args.lambda_
         for t in range(0, min(args.big_t, x.size(0)) - 1):  # first batch we go only T - 1 steps forward / backward
             mismatch = y[t + 1] != y[t]
-            ce_loss, mse_loss, state, x_hat_data = compute_loss(x[t], x[t + 1], y[t], state)
-            loss += mse_loss * args.mu + ce_loss * args.lambda_
+            last = t == min(args.big_t, x.size(0)) - 2
+            ce_loss, mse_loss, state, x_hat_data = compute_loss(x[t], x[t + 1], y[t], state, periodic=last)
+            if not last:
+                loss += mse_loss * args.mu + ce_loss * args.lambda_
+            else:
+                loss += mse_loss * args.mu + ce_loss[0] * args.lambda_ + ce_loss[1] * args.pi
 
         # compute gradient and do SGD step
         model.zero_grad()
