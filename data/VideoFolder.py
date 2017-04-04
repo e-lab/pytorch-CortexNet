@@ -152,7 +152,6 @@ class VideoFolder(data.Dataset):
         """
         Frees all video files' pointers
         """
-        print('Resetting data set internal state')
         for video in self.opened_videos:  # for every opened video
             for _ in range(len(video)):  # for as many times as pointers
                 opened_video = video.pop()  # pop an item
