@@ -74,7 +74,7 @@ def main():
         train_data = torch.load(train_data_name)
     else:
         train_path = path.join(args.data, 'train')
-        train_data = VideoFolder(root=train_path, transform=t, video_index=True)
+        train_data = VideoFolder(root=train_path, transform=t, shuffle='init')
         torch.save(train_data, train_data_name)
 
     train_loader = DataLoader(
@@ -93,7 +93,7 @@ def main():
         val_data = torch.load(val_data_name)
     else:
         val_path = path.join(args.data, 'val')
-        val_data = VideoFolder(root=val_path, transform=t, video_index=True)
+        val_data = VideoFolder(root=val_path, transform=t, shuffle='init')
         torch.save(val_data, val_data_name)
 
     val_loader = DataLoader(
@@ -118,8 +118,8 @@ def main():
         exit()
 
     print('Define model')
-    nb_train_videos = len(train_data.videos)
-    model = Model(args.size + (nb_train_videos,), args.spatial_size)
+    nb_classes = len(train_data.classes)
+    model = Model(args.size + (nb_classes,), args.spatial_size)
 
     print('Create a MSE and balanced NLL criterions')
     mse = nn.MSELoss()
@@ -127,10 +127,10 @@ def main():
     # independent CE computation
     nll_final = nn.CrossEntropyLoss(size_average=False)
     # balance classes based on frames per video; default balancing weight is 1.0f
-    w = torch.Tensor(train_data.frames_per_video)
+    w = torch.Tensor(train_data.frames_per_class)
     w.div_(w.mean()).pow_(-1)
     nll_train = nn.CrossEntropyLoss(w)
-    w = torch.Tensor(val_data.frames_per_video)
+    w = torch.Tensor(val_data.frames_per_class)
     w.div_(w.mean()).pow_(-1)
     nll_val = nn.CrossEntropyLoss(w)
 
