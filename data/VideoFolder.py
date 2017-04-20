@@ -81,13 +81,13 @@ class VideoFolder(data.Dataset):
         :type target_transform: object
         :param video_index: if ``True``, the label will be the video index instead of target class
         :type video_index: bool
-        :param shuffle: ``None``, ``'init'`` or ``'always'``
+        :param shuffle: ``None``, ``'init'`` or ``True``
         :type shuffle: str
         """
         classes, class_to_idx = self._find_classes(root)
         video_paths = self._find_videos(root, classes)
         videos, frames, frames_per_video, frames_per_class = self._make_data_set(
-            root, video_paths, class_to_idx, shuffle == 'init', video_index
+            root, video_paths, class_to_idx, shuffle, video_index
         )
 
         self.root = root
@@ -107,7 +107,7 @@ class VideoFolder(data.Dataset):
     def __getitem__(self, frame_idx):
         if frame_idx == 0:
             self.free()
-            if self.shuffle == 'always':
+            if self.shuffle is True:
                 self._shuffle()
 
         frame_idx %= self.frames  # wrap around indexing, if asking too much

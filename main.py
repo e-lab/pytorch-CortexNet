@@ -74,7 +74,7 @@ def main():
         train_data = torch.load(train_data_name)
     else:
         train_path = path.join(args.data, 'train')
-        train_data = VideoFolder(root=train_path, transform=t, shuffle='init')
+        train_data = VideoFolder(root=train_path, transform=t, shuffle=True)
         torch.save(train_data, train_data_name)
 
     train_loader = DataLoader(
