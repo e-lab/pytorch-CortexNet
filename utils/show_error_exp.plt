@@ -15,11 +15,13 @@ set terminal wxt background rgb "black" noraise
 set xlabel textcolor rgb "white"
 set ylabel textcolor rgb "white"
 set y2label textcolor rgb "white"
+set title textcolor rgb "white"
 set key textcolor rgb "white"
 set border lc rgb 'white'
 set grid lc rgb 'white'
 
 set grid
+set title "Network " . ARG1
 set xlabel "mini batch index / 10"
 set ylabel "mMSE"
 set y2label "CE"
