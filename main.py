@@ -121,6 +121,29 @@ def main():
     nb_classes = len(train_data.classes)
     model = Model(args.size + (nb_classes,), args.spatial_size)
 
+    print('Load pre-trained weights')
+    dict_33 = torch.load('model/model02D-33IS/model_best.pth.tar')['state_dict']
+
+    def load_state_dict(new_model, state_dict):
+        own_state = new_model.state_dict()
+        for name, param in state_dict.items():
+            name = name[19:]  # remove 'module.inner_model.' part
+            if name not in own_state:
+                raise KeyError('unexpected key "{}" in state_dict'
+                               .format(name))
+            if name.startswith('stabiliser'):
+                print('Skipping', name)
+                continue
+            if isinstance(param, nn.Parameter):
+                # backwards compatibility for serialized parameters
+                param = param.data
+            own_state[name].copy_(param)
+
+        missing = set(own_state.keys()) - set([k[19:] for k in state_dict.keys()])
+        if len(missing) > 0:
+            raise KeyError('missing keys in state_dict: "{}"'.format(missing))
+    load_state_dict(model, dict_33)
+
     print('Create a MSE and balanced NLL criterions')
     mse = nn.MSELoss()
 
