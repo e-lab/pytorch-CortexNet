@@ -17,7 +17,7 @@ from visdom import Visdom
 
 vis = Visdom()
 
-def masked_mse(pred, target):
+def masked_mse(pred, target, vid_match):
     '''
     masked MSE loss based on criteria from
     unsupervised_video paper
@@ -26,6 +26,12 @@ def masked_mse(pred, target):
     target = (target > 0.7).float()
     squarediff = torch.pow((target - pred), 2)
     squarediff = squarediff * mask
+    squarediff = squarediff.view(squarediff.size()[0],-1).sum(1)
+    mask = mask.view(mask.size()[0],-1).sum(1)
+    for i, s in enumerate(vid_match):
+        if not s:
+            squarediff[i] = 0
+            mask[i] = 0
     return squarediff.sum() / mask.sum()
 
 def main(args):
@@ -44,7 +50,7 @@ def main(args):
         dataset = train_dataset,
         batch_size = args.batch_size,
         sampler = BatchSampler(train_dataset, args.batch_size),
-        num_workers = 1,
+        num_workers = args.nworkers,
         pin_memory= args.cuda,
         drop_last = True
     )
@@ -53,7 +59,7 @@ def main(args):
         dataset = val_dataset,
         batch_size = args.batch_size,
         sampler = BatchSampler(val_dataset, args.batch_size),
-        num_workers = 1,
+        num_workers = args.nworkers,
         pin_memory = args.cuda,
         drop_last = True
     )
@@ -90,7 +96,7 @@ def main(args):
         validate(model, val_loader, args)
 
         # Save model parameters
-        torch.save(the_model.state_dict(),
+        torch.save(model.state_dict(),
                    str(Path(args.out_dir)/'ckpt-%d'%epoch))
 
         return
@@ -102,6 +108,8 @@ def train(model, data_loader, optimizer, args):
         'seg' : 0,
         'frame': 0
     }
+
+    model.train()  # set model in train mode
 
     l1_loss = nn.L1Loss()
     if args.cuda:
@@ -123,7 +131,8 @@ def train(model, data_loader, optimizer, args):
 
         # reset state to zero if new video
         prev_vid = prev_vid or vid
-        for i, match in enumerate(np.array(prev_vid) == np.array(vid)):
+        vid_match = np.array(prev_vid) == np.array(vid)
+        for i, match in enumerate(vid_match):
             if match:
                 continue
             for s in state:
@@ -133,7 +142,7 @@ def train(model, data_loader, optimizer, args):
         pred_frame, pred_seg, state = model(V(cframe), state)
 
         # calculate loss and step SGD
-        seg_loss = masked_mse(pred_seg, V(seg))
+        seg_loss = masked_mse(pred_seg, V(seg), vid_match)
         frame_loss = l1_loss(pred_frame, V(nframe))
         loss  = (args.alpha * seg_loss) + (args.beta * frame_loss)
         model.zero_grad()
@@ -156,10 +165,10 @@ def train(model, data_loader, optimizer, args):
             seg = seg.cpu().numpy()[0][0]
             pred_seg = pred_seg.data.cpu().numpy()[0][0]
             smap = np.zeros_like(cframe)
-            smap[0] = seg
+            smap[0][seg > 0.7] = 1
             seg = smap
             smap = np.zeros_like(cframe)
-            smap[0] = pred_seg
+            smap[0][pred_seg > 0.7] = 1
             pred_seg = smap
             # Draw stuff
             vis.image(cframe,
@@ -171,7 +180,7 @@ def train(model, data_loader, optimizer, args):
             vis.image(pred_frame,
                       win='predframe-batch-%d'%batch_no,
                       opts=dict(title='predframe-batch-%d'%batch_no))
-            vis.image(pred_frame-nframe,
+            vis.image(np.abs(pred_frame-nframe),
                       win='framediff-batch-%d'%batch_no,
                       opts=dict(title='framediff-batch-%d'%batch_no))
             vis.image(seg,
@@ -199,6 +208,8 @@ def validate(model, data_loader, args):
         'frame': 0
     }
 
+    model.eval()  # set model in train mode
+
     l1_loss = nn.L1Loss()
     if args.cuda:
         l1_loss.cuda()
@@ -219,7 +230,8 @@ def validate(model, data_loader, args):
 
         # reset state to zero if new video
         prev_vid = prev_vid or vid
-        for i, match in enumerate(np.array(prev_vid) == np.array(vid)):
+        vid_match = np.array(prev_vid) == np.array(vid)
+        for i, match in enumerate(vid_match):
             if match:
                 continue
             for s in state:
@@ -229,7 +241,7 @@ def validate(model, data_loader, args):
         pred_frame, pred_seg, state = model(V(cframe), state)
 
         # calculate loss and step SGD
-        seg_loss = masked_mse(pred_seg, V(seg))
+        seg_loss = masked_mse(pred_seg, V(seg), vid_match)
         frame_loss = l1_loss(pred_frame, V(nframe))
         loss  = (args.alpha * seg_loss) + (args.beta * frame_loss)
 
@@ -256,6 +268,8 @@ if __name__ == "__main__":
                         help='base folder of data', required=True)
     parser.add_argument('--batch-size', '-B', type=int, default=20,
                         metavar='B', help='batch size')
+    parser.add_argument('--nworkers', type=int, default=1,
+                        metavar='W', help='num of dataloader workers')
     parser.add_argument('--spatial-size', type=int,
                         default=(256, 256), nargs=2,
                         help='frame cropping size', metavar=('H', 'W'))
