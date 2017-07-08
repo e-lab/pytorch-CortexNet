@@ -278,6 +278,8 @@ if __name__ == "__main__":
                         help='decay lr by factor D every E epochs. lr = lr*D')
     parser.add_argument('--log-interval', type=int, default=10,
                         metavar='N', help='report interval')
+    parser.add_argument('--out-dir', type=str, default='.',
+                        help='directory to save model')
 
     args = parser.parse_args()
     main(args)
