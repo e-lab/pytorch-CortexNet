@@ -72,7 +72,6 @@ def main(args):
 
     if args.cuda:
         model.cuda()
-        loss.cuda()
 
     # Start training
     for epoch in range(args.epoch):
@@ -104,6 +103,8 @@ def train(model, data_loader, optimizer, args):
     }
 
     l1_loss = nn.L1Loss()
+    if args.cuda:
+        l1_loss.cuda()
     state = None
     prev_vid = None
     for batch_no, data in enumerate(data_loader):
@@ -148,11 +149,11 @@ def train(model, data_loader, optimizer, args):
 
         # print loss information
         if batch_no % args.log_interval == 0:
-            cframe = cframe.numpy()[0]
-            nframe = nframe.numpy()[0]
-            pred_frame = pred_frame.data.numpy()[0]
-            seg = seg.numpy()[0][0]
-            pred_seg = pred_seg.data.numpy()[0][0]
+            cframe = cframe.cpu().numpy()[0]
+            nframe = nframe.cpu().numpy()[0]
+            pred_frame = pred_frame.data.cpu().numpy()[0]
+            seg = seg.cpu().numpy()[0][0]
+            pred_seg = pred_seg.data.cpu().numpy()[0][0]
             smap = np.zeros_like(cframe)
             smap[0] = seg
             seg = smap
@@ -198,6 +199,8 @@ def validate(model, data_loader, args):
     }
 
     l1_loss = nn.L1Loss()
+    if args.cuda:
+        l1_loss.cuda()
     state = None
     prev_vid = None
     for batch_no, data in enumerate(data_loader):
