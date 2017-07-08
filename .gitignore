@@ -23,3 +23,6 @@ __pycache__
 last
 results
 *backup
+
+# Mac fs stuff
+.DS_Store
