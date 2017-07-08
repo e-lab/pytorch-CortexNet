@@ -71,6 +71,8 @@ class UnsupervisedVideo(data.Dataset):
         data = []
         videos = []
         for (fbase,_,fnames), (sbase,_,snames) in zip(frame_path, seg_path):
+            fnames = sorted(fnames)
+            snames = sorted(snames)
             for cf, nf, ns in zip(fnames[:-1], fnames[1:], snames[1:]):
                 fvid = cf.split('/')[-1].split('_')[0]
                 svid = ns.split('/')[-1].split('_')[0]

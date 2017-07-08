@@ -54,7 +54,8 @@ def main(args):
         batch_size = args.batch_size,
         sampler = BatchSampler(val_dataset, args.batch_size),
         num_workers = 1,
-        pin_memory = args.cuda
+        pin_memory = args.cuda,
+        drop_last = True
     )
 
     # Load model, define loss and optimizers
