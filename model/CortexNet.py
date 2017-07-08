@@ -52,8 +52,12 @@ class CortexNetBase(nn.Module):
             D = getattr(self, 'D_'+str(layer+1))
             D_BN = getattr(self, 'D_'+str(layer+1)+'_BN')
             if layer > 0:
-                s = state[layer - 1] or V(x.data.clone().zero_())
+                if state[layer - 1] is None:
+                    s = V(x.data.clone().zero_())
+                else:
+                    s = state[layer - 1] 
                 x = torch.cat((x,s), 1)
+
             x = D(x)
             residuals.append(x)
             x = f.relu(x)
