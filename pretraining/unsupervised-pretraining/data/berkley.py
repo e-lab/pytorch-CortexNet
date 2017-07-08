@@ -104,6 +104,9 @@ class UnsupervisedVideo(data.Dataset):
         nframe = self.transform(nframe)
         seg = self.transform(seg)
 
+        # masks are scaled from 0 to 100 in the dataset
+        # PIL rescales 0 - 255 by default
+        seg = seg / (100/255)
         return cframe, nframe, seg, vid
 
     def __len__(self):
