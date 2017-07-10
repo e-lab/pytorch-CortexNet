@@ -75,7 +75,6 @@ class CortexNetBase(nn.Module):
             x = G_BN(x)
             outputs['G_'+str(layer+1)] = x
 
-        outputs['residuals'] = residuals
         result = (x, state, outputs) if all_layers else (x, state)
         return result
 
@@ -83,49 +82,33 @@ class CortexNetBase(nn.Module):
 class CortexNetSeg(CortexNetBase):
     '''
     Base cortex net modified for next frame + segmentation pred
-    (assuming atleast two decoder and two generator)
+    (assuming atleast one decoder and one generator)
     '''
     def __init__(self, network_size):
         super().__init__(network_size)
 
-        G_2_SEG = nn.ConvTranspose2d(in_channels = self.G_2.in_channels,
-                                   out_channels = self.G_2.out_channels,
+        G_SEG = nn.ConvTranspose2d(in_channels = self.G_1.in_channels,
+                                   out_channels = 1,
                                    kernel_size = CortexNetBase.KERNEL_SIZE,
                                    stride = CortexNetBase.KERNEL_STRIDE,
                                    padding = CortexNetBase.PADDING,
                                    output_padding=CortexNetBase.PADDING)
-        G_2_SEG_BN = nn.BatchNorm2d(self.G_2.out_channels)
+        G_SEG_BN = nn.BatchNorm2d(1)
 
-        G_1_SEG = nn.ConvTranspose2d(in_channels = self.G_1.in_channels,
-                                     out_channels = 1,
-                                     kernel_size = CortexNetBase.KERNEL_SIZE,
-                                     stride = CortexNetBase.KERNEL_STRIDE,
-                                     padding = CortexNetBase.PADDING,
-                                     output_padding=CortexNetBase.PADDING)
-        G_1_SEG_BN = nn.BatchNorm2d(1)
-
-        setattr(self, 'G_1_SEG', G_1_SEG)
-        setattr(self, 'G_1_SEG_BN', G_1_SEG_BN)
-        setattr(self, 'G_2_SEG', G_2_SEG)
-        setattr(self, 'G_2_SEG_BN', G_2_SEG_BN)
+        setattr(self, 'G_SEG', G_SEG)
+        setattr(self, 'G_SEG_BN', G_SEG_BN)
 
     def forward(self, x, state, all_layers = False):
 
         x, state, outputs = super().forward(x, state, True)
 
-        # segmentation g block's input is either the third last G or
-        # output of D if only two D,G blocks
-        seg_in = outputs['G_3'] if self.nlayers > 2 else outputs['D_2']
-
-        mask = self.G_2_SEG(seg_in)
-        mask += outputs['residuals'][0]
+        # segmentation g block's input is either the second last G or
+        # output of D if only one D,G blocks
+        seg_in = outputs['G_2'] if self.nlayers > 1 else outputs['D_1']
+        mask = self.G_SEG(seg_in)
         mask = f.relu(mask)
-        mask = self.G_2_SEG_BN(mask)
-        outputs['G_2_SEG'] = mask
-        mask = self.G_1_SEG(mask)
-        mask = f.relu(mask)
-        mask = self.G_1_SEG_BN(mask)
-        outputs['G_1_SEG'] = mask
+        mask = self.G_SEG_BN(mask)
+        outputs['G_SEG'] = mask
 
         result = (x, mask, state, outputs) if all_layers else (x, mask, state)
         return result
