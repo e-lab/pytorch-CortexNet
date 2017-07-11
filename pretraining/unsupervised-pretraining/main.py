@@ -97,7 +97,7 @@ def main(args):
 
         # Save model parameters
         torch.save(model.state_dict(),
-                   str(Path(args.out_dir)/'ckpt-%d'%epoch))
+                   str(Path(args.out_dir)/('ckpt-%d'%epoch)))
 
         return
 
