@@ -37,7 +37,7 @@ def masked_mse(pred, target, vid_match):
 def main(args):
     # Create data loaders
     transform = transforms.Compose([
-        transforms.Scale(np.max(args.spatial_size)),
+        transforms.Scale(int(np.max(args.spatial_size))),
         transforms.CenterCrop(args.spatial_size),
         transforms.ToTensor()
     ])
@@ -78,7 +78,8 @@ def main(args):
     #scheduler = optim.lr_scheduler.StepLR(optimizer, step, gamma)
 
     if args.cuda:
-        model.cuda()
+        model = torch.nn.DataParallel(model)
+        model = model.cuda()
 
     # Start training
     for epoch in range(args.epoch):
@@ -113,7 +114,7 @@ def train(model, data_loader, optimizer, args):
 
     l1_loss = nn.L1Loss()
     if args.cuda:
-        l1_loss.cuda()
+        l1_loss = l1_loss.cuda()
     state = None
     prev_vid = None
     for batch_no, data in enumerate(data_loader):
@@ -212,7 +213,7 @@ def validate(model, data_loader, args):
 
     l1_loss = nn.L1Loss()
     if args.cuda:
-        l1_loss.cuda()
+        l1_loss = l1_loss.cuda()
     state = None
     prev_vid = None
     for batch_no, data in enumerate(data_loader):
