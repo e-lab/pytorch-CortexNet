@@ -34,6 +34,19 @@ def masked_mse(pred, target, vid_match):
             mask[i] = 0
     return squarediff.sum() / mask.sum()
 
+def masked_logistic_loss(pred, target, vid_match):
+    mask = ((target < 0.4) + (target > 0.7)).float()
+    target = (target > 0.7).float() - (target < 0.4).float()
+    loss = torch.log(1 + torch.exp(-target*pred))
+    loss = loss * mask
+    loss = loss.view(loss.size()[0], -1).sum(1)
+    mask = mask.view(mask.size()[0], -1).sum(1)
+    for i, s in enumerate(vid_match):
+        if not s:
+            loss[i] = 0
+            mask[i] = 0
+    return loss.sum() / mask.sum()
+
 def main(args):
     # Create data loaders
     transform = transforms.Compose([
@@ -143,7 +156,7 @@ def train(model, data_loader, optimizer, args):
         pred_frame, pred_seg, state = model(V(cframe), state)
 
         # calculate loss and step SGD
-        seg_loss = masked_mse(pred_seg, V(seg), vid_match)
+        seg_loss = masked_logistic_loss(pred_seg, V(seg), vid_match)
         frame_loss = l1_loss(pred_frame, V(nframe))
         loss  = (args.alpha * seg_loss) + (args.beta * frame_loss)
         model.zero_grad()
@@ -242,7 +255,7 @@ def validate(model, data_loader, args):
         pred_frame, pred_seg, state = model(V(cframe), state)
 
         # calculate loss and step SGD
-        seg_loss = masked_mse(pred_seg, V(seg), vid_match)
+        seg_loss = masked_logistic_loss(pred_seg, V(seg), vid_match)
         frame_loss = l1_loss(pred_frame, V(nframe))
         loss  = (args.alpha * seg_loss) + (args.beta * frame_loss)
 

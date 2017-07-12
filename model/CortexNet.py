@@ -108,6 +108,7 @@ class CortexNetSeg(CortexNetBase):
         mask = self.G_SEG(seg_in)
         mask = f.relu(mask)
         mask = self.G_SEG_BN(mask)
+        mask = f.sigmoid(mask)
         outputs['G_SEG'] = mask
 
         result = (x, mask, state, outputs) if all_layers else (x, mask, state)
