@@ -113,7 +113,6 @@ def main(args):
         torch.save(model.state_dict(),
                    str(Path(args.out_dir)/('ckpt-%d'%epoch)))
 
-        return
 
 def train(model, data_loader, optimizer, args):
 
@@ -182,7 +181,8 @@ def train(model, data_loader, optimizer, args):
             smap[0][seg > 0.7] = 1
             seg = smap
             smap = np.zeros_like(cframe)
-            smap[0][pred_seg > 0.7] = 1
+            smap[0] = pred_seg
+            smap[1][pred_seg > 0.7] = 1
             pred_seg = smap
             # Draw stuff
             vis.image(cframe,
