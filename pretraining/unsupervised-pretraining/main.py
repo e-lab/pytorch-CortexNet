@@ -138,18 +138,14 @@ def train(model, data_loader, optimizer, args):
             nframe = nframe.cuda(async=True)
             seg = seg.cuda(async=True)
 
-        # detach state's past
-        if state:
-            state = [V(s.data) for s in state]
-
         # reset state to zero if new video
         prev_vid = prev_vid or vid
         vid_match = np.array(prev_vid) == np.array(vid)
         for i, match in enumerate(vid_match):
-            if match:
-                continue
+            if match: continue
             for s in state:
-                s[i] = 0
+                # detach state's past and zero
+                s[i] = V(s[i].data.zero_())
 
         # run model
         pred_frame, pred_seg, state = model(V(cframe), state)
@@ -238,18 +234,14 @@ def validate(model, data_loader, args):
             nframe = nframe.cuda(async=True)
             seg = seg.cuda(async=True)
 
-        # detach state's past
-        if state:
-            state = [V(s.data) for s in state]
-
         # reset state to zero if new video
         prev_vid = prev_vid or vid
         vid_match = np.array(prev_vid) == np.array(vid)
         for i, match in enumerate(vid_match):
-            if match:
-                continue
+            if match: continue
             for s in state:
-                s[i] = 0
+                s[i] = V(s[i].data.zero_())
+                #s[i] = 0
 
         # run model
         pred_frame, pred_seg, state = model(V(cframe), state)

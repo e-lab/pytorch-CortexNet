@@ -55,13 +55,13 @@ class CortexNetBase(nn.Module):
                 if state[layer - 1] is None:
                     s = V(x.data.clone().zero_())
                 else:
-                    s = state[layer - 1] 
+                    s = torch.cat(state[layer - 1], 0)
                 x = torch.cat((x,s), 1)
 
             x = D(x)
             residuals.append(x)
-            x = f.relu(x)
             x = D_BN(x)
+            x = f.relu(x)
             outputs['D_'+str(layer+1)] = x
 
         for layer in reversed(range(self.nlayers)):
@@ -69,10 +69,10 @@ class CortexNetBase(nn.Module):
             G_BN = getattr(self, 'G_'+str(layer+1)+'_BN')
             x = G(x)
             if layer > 0:
-                state[layer - 1] = x
-                x += residuals[layer - 1]
-            x = f.relu(x)
+                state[layer - 1] = torch.split(x, 1, 0)
+                x = torch.add(x, residuals[layer - 1])
             x = G_BN(x)
+            x = f.relu(x)
             outputs['G_'+str(layer+1)] = x
 
         result = (x, state, outputs) if all_layers else (x, state)
@@ -106,8 +106,8 @@ class CortexNetSeg(CortexNetBase):
         # output of D if only one D,G blocks
         seg_in = outputs['G_2'] if self.nlayers > 1 else outputs['D_1']
         mask = self.G_SEG(seg_in)
-        mask = f.relu(mask)
         mask = self.G_SEG_BN(mask)
+        mask = f.relu(mask)
         mask = f.sigmoid(mask)
         outputs['G_SEG'] = mask
 
