@@ -55,7 +55,7 @@ class CortexNetBase(nn.Module):
                 if state[layer - 1] is None:
                     s = V(x.data.clone().zero_())
                 else:
-                    s = torch.cat(state[layer - 1], 0)
+                    s = state[layer - 1]
                 x = torch.cat((x,s), 1)
 
             x = D(x)
@@ -69,8 +69,8 @@ class CortexNetBase(nn.Module):
             G_BN = getattr(self, 'G_'+str(layer+1)+'_BN')
             x = G(x)
             if layer > 0:
-                state[layer - 1] = torch.split(x, 1, 0)
-                x = torch.add(x, residuals[layer - 1])
+                state[layer - 1] = x
+                x += residuals[layer - 1]
             x = G_BN(x)
             x = f.relu(x)
             outputs['G_'+str(layer+1)] = x

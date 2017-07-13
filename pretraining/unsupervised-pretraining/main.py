@@ -147,8 +147,21 @@ def train(model, data_loader, optimizer, args):
                 # detach state's past and zero
                 s[i] = V(s[i].data.zero_())
 
+        if state:
+            _state = []
+            for s in state:
+                s = torch.cat(s, 0)
+                _state.append(s)
+            state = _state
+
         # run model
         pred_frame, pred_seg, state = model(V(cframe), state)
+
+        _state = []
+        for s in state:
+            s = list(torch.split(s, 1, 0))
+            _state.append(s)
+        state = _state
 
         # calculate loss and step SGD
         seg_loss = masked_logistic_loss(pred_seg, V(seg), vid_match)
@@ -241,10 +254,22 @@ def validate(model, data_loader, args):
             if match: continue
             for s in state:
                 s[i] = V(s[i].data.zero_())
-                #s[i] = 0
+
+        if state:
+            _state = []
+            for s in state:
+                s = torch.cat(s, 0)
+                _state.append(s)
+            state = _state
 
         # run model
         pred_frame, pred_seg, state = model(V(cframe), state)
+
+        _state = []
+        for s in state:
+            s = list(torch.split(s, 1, 0))
+            _state.append(s)
+        state = _state
 
         # calculate loss and step SGD
         seg_loss = masked_logistic_loss(pred_seg, V(seg), vid_match)
