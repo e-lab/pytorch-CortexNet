@@ -1,51 +1,36 @@
-import pathlib
 import os
-from random import shuffle
-import time
-
+import pathlib
 import numpy as np
-import torch.utils.data as data
-from torchvision import transforms
 from PIL import Image
 
-class BatchSampler(data.sampler.Sampler):
-    def __init__(self, dataset, batch_size):
-        self.dataset = dataset
-        self.batch_size = batch_size
+import torch
+import torch.utils.data as data
+from torchvision import transforms
 
-    def __iter__(self):
-        vids = list(self.dataset.videos)
-        shuffle(vids)
-        vids = iter(vids)
-        # the list of videos from which frames will be served
-        batch_videos = [None]*self.batch_size
-        for _ in range(len(self)):
-            batch_frames = [None]*self.batch_size
-            reload_idx = []
-            for i, vid in enumerate(batch_videos):
-                if vid is None:
-                    reload_idx.append(i)
-                    continue
-                try:
-                    batch_frames[i] = next(vid)
-                except StopIteration:
-                    reload_idx.append(i)
-            for i in reload_idx:
-                # none of these next should cause stop iter
-                batch_videos[i] = iter(self.dataset.vid_index[next(vids)])
-                batch_frames[i] = next(batch_videos[i])
-            # This can be modified to yield batch_frames
-            # once batch_sampler is added to DataLoader
-            for idx in batch_frames:
-                yield idx
-
-    def __len__(self):
-        return len(self.dataset)#//self.batch_size
+def collate_fn(args):
+    # assume all data is of same length 
+    batch_size = len(args)
+    seq_length = len(args[0][0]) # assuming non empty data
+    data = []
+    for seq in range(seq_length):
+        frames = []
+        segs = []
+        valid = []
+        for arg in args:
+            f, s, v = arg
+            frames.append(torch.unsqueeze(f[seq], 0))
+            segs.append(torch.unsqueeze(s[seq], 0))
+            valid.append(v[seq])
+        frames = torch.cat(frames, 0)
+        segs = torch.cat(segs, 0)
+        data.append((frames, segs, valid))
+    return data
 
 class UnsupervisedVideo(data.Dataset):
-
-    def __init__(self, root, transform=transforms.ToTensor(), split=None):
-        start_time = time.time()
+    '''
+    Load the dataset into sequences of given length
+    '''
+    def __init__(self, root, seq_length, transform=transforms.ToTensor(), split=None):
         root = pathlib.Path(root)
         frame_path = root / 'UnsupVideo_Frames'
         seg_path = root / 'UnsupVideo_Segments'
@@ -56,58 +41,62 @@ class UnsupervisedVideo(data.Dataset):
         frame_path = list(os.walk(frame_path.as_posix()))
         seg_path = list(os.walk(seg_path.as_posix()))
 
-        if not split is None:
-            if split > 0:
-                start = 0
-                end = int(len(frame_path)*split)
-            if split < 0:
-                split = 1 + split
-                start = int(len(frame_path)*split)
-                end = -1
-            frame_path = frame_path[start:end]
-            seg_path = seg_path[start:end]
-
         vid_index = {}
-        data = []
-        videos = []
         for (fbase,_,fnames), (sbase,_,snames) in zip(frame_path, seg_path):
             fnames = sorted(fnames)
             snames = sorted(snames)
-            for cf, nf, ns in zip(fnames[:-1], fnames[1:], snames[1:]):
-                fvid = cf.split('/')[-1].split('_')[0]
-                svid = ns.split('/')[-1].split('_')[0]
-                if not fvid == svid:
-                    continue
-                if fvid not in vid_index:
-                    vid_index[fvid] = []
-                    videos.append(fvid)
-                vid_index[fvid].append(len(data))
-                data.append((os.path.join(fbase, cf),
-                             os.path.join(fbase, nf),
-                             os.path.join(sbase, ns),
-                             fvid))
+            for f, s in zip(fnames, snames):
+                video_id = f.split('/')[-1].split('_')[0]
+                if video_id not in vid_index:
+                    vid_index[video_id] = ([], [])
+                vid_index[video_id][0].append(os.path.join(fbase, f))
+                vid_index[video_id][1].append(os.path.join(sbase, s))
 
-        self.vid_index = vid_index
+        videos = sorted(vid_index.keys())
+        if not split is None:
+            if split > 0:
+                start = 0
+                end = int(len(videos)*split)
+            if split < 0:
+                split = 1 + split
+                start = int(len(videos)*split)
+                end = -1
+            videos = videos[start:end]
+
+        data = []
+        for vid in videos:
+            frames, segs = vid_index[vid]
+            frames = frames[:-1]
+            segs = segs[1:]
+            if len(frames) < 3:
+                # not useful for training
+                continue
+            for i in range(0, len(frames), seq_length):
+                start = i
+                end   = i + seq_length 
+                if end > len(frames):
+                    start = -seq_length
+                    end = len(frames)
+                data.append((frames[start:end], segs[start:end]))
+
         self.data = data
-        self.videos = videos
         self.transform = transform
-
-        print('Dataset init took %d secs'%(time.time() - start_time))
+        self.T = seq_length
 
     def __getitem__(self, index):
-        cframe, nframe, seg, vid = self.data[index]
-        cframe = Image.open(cframe)
-        nframe = Image.open(nframe)
-        seg   = Image.open(seg)
-
-        cframe = self.transform(cframe)
-        nframe = self.transform(nframe)
-        seg = self.transform(seg)
-
-        # masks are scaled from 0 to 100 in the dataset
-        # PIL rescales 0 - 255 by default
-        seg = seg / (100/255)
-        return cframe, nframe, seg, vid
+        # segs are scaled from 0 to 100 in the dataset
+        # PIL rescales 0 - 255 by default, so adjust for that
+        frames, segs = self.data[index]
+        frames = [Image.open(f) for f in frames]
+        segs   = [Image.open(s) for s in segs]
+        valid  = [True for _ in frames]
+        if len(frames) < self.T:
+            frames += [Image.new(frames[-1].mode, frames[-1].size) for _ in range(self.T - len(frames))]
+            segs   += [Image.new(segs[-1].mode, segs[-1].size) for _ in range(self.T - len(segs))]
+            valid  += [False for _ in range(self.T - len(valid))]
+        frames = [self.transform(f) for f in frames]
+        segs   = [(self.transform(s)/(100/255)) for s in segs]
+        return frames, segs, valid
 
     def __len__(self):
         return len(self.data)

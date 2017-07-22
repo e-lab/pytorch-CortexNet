@@ -10,11 +10,10 @@ from torch.autograd import Variable as V
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from model.CortexNet import CortexNetSeg as Model
-from data.berkley import UnsupervisedVideo, BatchSampler
+from model.CortexNet import CortexNetSeg as Mode
+from data.berkley import UnsupervisedVideo, collate_fn
 
 from visdom import Visdom
-
 vis = Visdom()
 
 def masked_mse(pred, target, vid_match):
@@ -55,26 +54,26 @@ def main(args):
         transforms.ToTensor()
     ])
     # Load first 80% as training dataset
-    train_dataset = UnsupervisedVideo(args.data_dir, transform, split=0.8)
+    train_dataset = UnsupervisedVideo(args.data_dir, args.seq_length, transform, split=0.8)
     # Load last 20% as val dataset
-    val_dataset = UnsupervisedVideo(args.data_dir, transform, split=-0.2)
+    val_dataset = UnsupervisedVideo(args.data_dir, args.seq_length, transform, split=-0.2)
 
     train_loader = DataLoader(
         dataset = train_dataset,
         batch_size = args.batch_size,
-        sampler = BatchSampler(train_dataset, args.batch_size),
+        sampler = RandomSampler(train_dataset),
         num_workers = args.nworkers,
-        pin_memory= args.cuda,
-        drop_last = True
+        pin_memory = args.cuda,
+        collate_fn = collate_fn
     )
 
     val_loader = DataLoader(
         dataset = val_dataset,
         batch_size = args.batch_size,
-        sampler = BatchSampler(val_dataset, args.batch_size),
+        sampler = RandomSampler(val_dataset),
         num_workers = args.nworkers,
         pin_memory = args.cuda,
-        drop_last = True
+        collate_fn = collate_fn
     )
 
     # Load model, define loss and optimizers
@@ -145,7 +144,8 @@ def train(model, data_loader, optimizer, args):
             if match: continue
             for s in state:
                 # detach state's past and zero
-                s[i] = V(s[i].data.zero_())
+                s[i].grad.detach_()
+                s[i].detach_()# = V(s[i].data.zero_())
 
         if state:
             _state = []
@@ -180,7 +180,7 @@ def train(model, data_loader, optimizer, args):
         prev_vid = vid
 
         # print loss information
-        if batch_no % args.log_interval == 0:
+        if True:#batch_no % args.log_interval == 0:
             cframe = cframe.cpu().numpy()[0]
             nframe = nframe.cpu().numpy()[0]
             pred_frame = pred_frame.data.cpu().numpy()[0]
@@ -299,6 +299,8 @@ if __name__ == "__main__":
                         help='base folder of data', required=True)
     parser.add_argument('--batch-size', '-B', type=int, default=20,
                         metavar='B', help='batch size')
+    parser.add_argument('--seq-length', '-T', type=int, default=5,
+                        metavar='T', help='Sequence length to train on')
     parser.add_argument('--nworkers', type=int, default=1,
                         metavar='W', help='num of dataloader workers')
     parser.add_argument('--spatial-size', type=int,
