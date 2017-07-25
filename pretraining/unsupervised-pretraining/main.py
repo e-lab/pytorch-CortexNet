@@ -8,43 +8,29 @@ from torch import nn, optim
 from torch.nn import functional as f
 from torch.autograd import Variable as V
 from torch.utils.data import DataLoader
+from torch.utils.data.sampler import RandomSampler
 from torchvision import transforms
 
-from model.CortexNet import CortexNetSeg as Mode
+from model.CortexNet import CortexNetSeg as Model
 from data.berkley import UnsupervisedVideo, collate_fn
 
 from visdom import Visdom
 vis = Visdom()
 
-def masked_mse(pred, target, vid_match):
-    '''
-    masked MSE loss based on criteria from
-    unsupervised_video paper
-    '''
-    mask = ((target < 0.4) + (target > 0.7)).float()
-    target = (target > 0.7).float()
-    squarediff = torch.pow((target - pred), 2)
-    squarediff = squarediff * mask
-    squarediff = squarediff.view(squarediff.size()[0],-1).sum(1)
-    mask = mask.view(mask.size()[0],-1).sum(1)
-    for i, s in enumerate(vid_match):
-        if not s:
-            squarediff[i] = 0
-            mask[i] = 0
-    return squarediff.sum() / mask.sum()
-
-def masked_logistic_loss(pred, target, vid_match):
+def masked_logistic_loss(pred, target, valid):
     mask = ((target < 0.4) + (target > 0.7)).float()
     target = (target > 0.7).float() - (target < 0.4).float()
     loss = torch.log(1 + torch.exp(-target*pred))
     loss = loss * mask
     loss = loss.view(loss.size()[0], -1).sum(1)
     mask = mask.view(mask.size()[0], -1).sum(1)
-    for i, s in enumerate(vid_match):
+    for i, s in enumerate(valid):
         if not s:
             loss[i] = 0
             mask[i] = 0
-    return loss.sum() / mask.sum()
+    loss = loss.sum() if mask.sum().data[0] == 0 else loss.sum() / mask.sum()
+
+    return loss
 
 def main(args):
     # Create data loaders
@@ -126,61 +112,47 @@ def train(model, data_loader, optimizer, args):
     l1_loss = nn.L1Loss()
     if args.cuda:
         l1_loss = l1_loss.cuda()
-    state = None
-    prev_vid = None
+
     for batch_no, data in enumerate(data_loader):
         start = time.time()
-        # set data to async
-        cframe, nframe, seg, vid = data
-        if args.cuda:
-            cframe = cframe.cuda(async=True)
-            nframe = nframe.cuda(async=True)
-            seg = seg.cuda(async=True)
 
-        # reset state to zero if new video
-        prev_vid = prev_vid or vid
-        vid_match = np.array(prev_vid) == np.array(vid)
-        for i, match in enumerate(vid_match):
-            if match: continue
-            for s in state:
-                # detach state's past and zero
-                s[i].grad.detach_()
-                s[i].detach_()# = V(s[i].data.zero_())
+        # reset state
+        state = None 
 
-        if state:
-            _state = []
-            for s in state:
-                s = torch.cat(s, 0)
-                _state.append(s)
-            state = _state
+        # accumulate loss
+        loss = 0
+        for cframe, nframe, seg, valid in data:
 
-        # run model
-        pred_frame, pred_seg, state = model(V(cframe), state)
+            # predict for every frame in sequence
+            if args.cuda:
+                cframe = cframe.cuda(async=True)
+                nframe = nframe.cuda(async=True)
+                seg = seg.cuda(async=True)
+            pred_frame, pred_seg, state = model(V(cframe), state)
 
-        _state = []
-        for s in state:
-            s = list(torch.split(s, 1, 0))
-            _state.append(s)
-        state = _state
+            # compute loss and accumulate
+            seg_loss = masked_logistic_loss(pred_seg, V(seg), valid)
+            # set invalid data to 0 loss
+            for i, s in enumerate(valid):
+                if not s:
+                    pred_frame.data[i].copy_(nframe[i])
+            frame_loss = l1_loss(pred_frame, V(nframe))
+            loss += (args.alpha * seg_loss) + (args.beta * frame_loss)
 
-        # calculate loss and step SGD
-        seg_loss = masked_logistic_loss(pred_seg, V(seg), vid_match)
-        frame_loss = l1_loss(pred_frame, V(nframe))
-        loss  = (args.alpha * seg_loss) + (args.beta * frame_loss)
+            # store loss for future logging
+            total_loss['seg'] += seg_loss.data[0]
+            total_loss['frame'] += frame_loss.data[0]
+
+        # propogate accumulated loss
         model.zero_grad()
         loss.backward()
         optimizer.step()
 
-        # record time, loss etc
+        # record time for logging
         batch_time += time.time() - start
-        total_loss['seg'] += seg_loss.data[0]
-        total_loss['frame'] += frame_loss.data[0]
-
-        # retain current video ids to compare in future
-        prev_vid = vid
 
         # print loss information
-        if True:#batch_no % args.log_interval == 0:
+        if batch_no % args.log_interval == 0:
             cframe = cframe.cpu().numpy()[0]
             nframe = nframe.cpu().numpy()[0]
             pred_frame = pred_frame.data.cpu().numpy()[0]
@@ -213,17 +185,18 @@ def train(model, data_loader, optimizer, args):
                       win='predseg-batch-%d'%batch_no,
                       opts=dict(title='predseg-batch-%d'%batch_no))
             # Print stuff
-            avg_time = batch_time *1e3/ args.log_interval
-            seg_loss = total_loss['seg'] / args.log_interval
-            frame_loss = total_loss['frame'] / args.log_interval
+            avg_time = batch_time * 10e3 / args.log_interval
+            total_loss['seg'] /= (args.log_interval * args.seq_length)
+            total_loss['frame'] /= (args.log_interval * args.seq_length)
             print('| {:4d}/{:4d} batches| {:7.2f} ms/batch |'
                   ' {:.2e} seg_loss | {:.2e} frame_loss |'.
                   format(batch_no + 1, len(data_loader),
-                         avg_time, seg_loss, frame_loss))
+                         avg_time, total_loss['seg'], total_loss['frame']))
             for k in total_loss: total_loss[k] = 0
             batch_time = 0
 
 def validate(model, data_loader, args):
+
 
     batch_time = 0
     total_loss = {
@@ -231,66 +204,57 @@ def validate(model, data_loader, args):
         'frame': 0
     }
 
-    model.eval()  # set model in train mode
+    model.eval()  # set model in val mode
 
     l1_loss = nn.L1Loss()
     if args.cuda:
         l1_loss = l1_loss.cuda()
-    state = None
-    prev_vid = None
+
     for batch_no, data in enumerate(data_loader):
         start = time.time()
-        # set data to async
-        cframe, nframe, seg, vid = data
-        if args.cuda:
-            cframe = cframe.cuda(async=True)
-            nframe = nframe.cuda(async=True)
-            seg = seg.cuda(async=True)
 
-        # reset state to zero if new video
-        prev_vid = prev_vid or vid
-        vid_match = np.array(prev_vid) == np.array(vid)
-        for i, match in enumerate(vid_match):
-            if match: continue
-            for s in state:
-                s[i] = V(s[i].data.zero_())
+        # reset state
+        state = None 
 
-        if state:
-            _state = []
-            for s in state:
-                s = torch.cat(s, 0)
-                _state.append(s)
-            state = _state
+        # accumulate loss
+        loss = 0
+        for cframe, nframe, seg, valid in data:
+            # predict for every frame in sequence
+            if args.cuda:
+                cframe = cframe.cuda(async=True)
+                nframe = nframe.cuda(async=True)
+                seg = seg.cuda(async=True)
+            pred_frame, pred_seg, state = model(V(cframe), state)
 
-        # run model
-        pred_frame, pred_seg, state = model(V(cframe), state)
+            # compute loss and accumulate
+            seg_loss = masked_logistic_loss(pred_seg, V(seg), valid)
+            # set invalid data to 0 loss
+            for i, s in enumerate(valid):
+                if not s:
+                    pred_frame[i].copy_(nframe[i])
+            frame_loss = l1_loss(pred_frame, V(nframe))
+            loss += (args.alpha * seg_loss) + (args.beta * frame_loss)
 
-        _state = []
-        for s in state:
-            s = list(torch.split(s, 1, 0))
-            _state.append(s)
-        state = _state
+            # store loss for future logging
+            total_loss['seg'] += seg_loss.data[0]
+            total_loss['frame'] += frame_loss.data[0]
 
-        # calculate loss and step SGD
-        seg_loss = masked_logistic_loss(pred_seg, V(seg), vid_match)
-        frame_loss = l1_loss(pred_frame, V(nframe))
-        loss  = (args.alpha * seg_loss) + (args.beta * frame_loss)
+        # propogate accumulated loss
+        model.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-        # record time, loss etc
+        # record time for logging
         batch_time += time.time() - start
-        total_loss['seg'] += seg_loss.data[0]
-        total_loss['frame'] += frame_loss.data[0]
-
-        # retain current video ids to compare in future
-        prev_vid = vid
 
     # print loss information
-    avg_time = batch_time * 1e3 / len(data_loader)
-    seg_loss = total_loss['seg'] / len(data_loader)
-    frame_loss = total_loss['frame'] / len(data_loader)
+    avg_time = batch_time * 10e3 / len(data_loader)
+    total_loss['seg'] /= (len(data_loader) * args.seq_length)
+    total_loss['frame'] /= (len(data_loader) * args.seq_length)
     print('| val | {:4d} batches| {:7.2f} ms/batch |'
           ' {:.2e} seg_loss | {:.2e} frame_loss |'.
-          format(len(data_loader), avg_time, seg_loss, frame_loss))
+          format(len(data_loader), avg_time,
+                 total_loss['seg'], total_loss['frame']))
 
 
 if __name__ == "__main__":

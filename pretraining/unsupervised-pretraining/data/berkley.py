@@ -13,17 +13,20 @@ def collate_fn(args):
     seq_length = len(args[0][0]) # assuming non empty data
     data = []
     for seq in range(seq_length):
-        frames = []
+        cframes = []
+        nframes = []
         segs = []
         valid = []
         for arg in args:
-            f, s, v = arg
-            frames.append(torch.unsqueeze(f[seq], 0))
+            f, n, s, v = arg
+            cframes.append(torch.unsqueeze(f[seq], 0))
+            nframes.append(torch.unsqueeze(n[seq], 0))
             segs.append(torch.unsqueeze(s[seq], 0))
             valid.append(v[seq])
-        frames = torch.cat(frames, 0)
+        cframes = torch.cat(cframes, 0)
+        nframes = torch.cat(nframes, 0)
         segs = torch.cat(segs, 0)
-        data.append((frames, segs, valid))
+        data.append((cframes, nframes, segs, valid))
     return data
 
 class UnsupervisedVideo(data.Dataset):
@@ -66,18 +69,17 @@ class UnsupervisedVideo(data.Dataset):
         data = []
         for vid in videos:
             frames, segs = vid_index[vid]
-            frames = frames[:-1]
+            if len(frames) < 3: continue # not useful for training
+            cframes = frames[:-1]
+            nframes = frames[1:]
             segs = segs[1:]
-            if len(frames) < 3:
-                # not useful for training
-                continue
-            for i in range(0, len(frames), seq_length):
+            for i in range(0, len(cframes), seq_length):
                 start = i
-                end   = i + seq_length 
-                if end > len(frames):
+                end   = i + seq_length
+                if end > len(cframes):
                     start = -seq_length
-                    end = len(frames)
-                data.append((frames[start:end], segs[start:end]))
+                    end = len(cframes)
+                data.append((cframes[start:end], nframes[start:end], segs[start:end]))
 
         self.data = data
         self.transform = transform
@@ -86,17 +88,21 @@ class UnsupervisedVideo(data.Dataset):
     def __getitem__(self, index):
         # segs are scaled from 0 to 100 in the dataset
         # PIL rescales 0 - 255 by default, so adjust for that
-        frames, segs = self.data[index]
-        frames = [Image.open(f) for f in frames]
+        cframes, nframes, segs = self.data[index]
+        cframes = [Image.open(f) for f in cframes]
+        nframes = [Image.open(f) for f in nframes]
         segs   = [Image.open(s) for s in segs]
-        valid  = [True for _ in frames]
-        if len(frames) < self.T:
-            frames += [Image.new(frames[-1].mode, frames[-1].size) for _ in range(self.T - len(frames))]
-            segs   += [Image.new(segs[-1].mode, segs[-1].size) for _ in range(self.T - len(segs))]
-            valid  += [False for _ in range(self.T - len(valid))]
-        frames = [self.transform(f) for f in frames]
-        segs   = [(self.transform(s)/(100/255)) for s in segs]
-        return frames, segs, valid
+        valid  = [True for _ in cframes]
+        if len(cframes) < self.T:
+            cframes += [Image.new(cframes[-1].mode, cframes[-1].size) for _ in range(self.T - len(cframes))]
+            nframes += [Image.new(nframes[-1].mode, nframes[-1].size) for _ in range(self.T - len(nframes))]
+            segs    += [Image.new(segs[-1].mode, segs[-1].size) for _ in range(self.T - len(segs))]
+            valid   += [False for _ in range(self.T - len(valid))]
+
+        cframes = [self.transform(f) for f in cframes]
+        nframes = [self.transform(f) for f in nframes]
+        segs    = [(self.transform(s)/(100/255)) for s in segs]
+        return cframes, nframes, segs, valid
 
     def __len__(self):
         return len(self.data)
