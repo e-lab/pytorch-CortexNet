@@ -17,6 +17,7 @@ class CortexNetBase(nn.Module):
     def __init__(self, network_size):
         super().__init__()
         self.nlayers = len(network_size) - 1
+
         
         for layer in range(self.nlayers):
             # Create D[layer] block
@@ -29,7 +30,8 @@ class CortexNetBase(nn.Module):
             D_BN = nn.BatchNorm2d(network_size[layer+1])
 
             # Create G[layer] block
-            G = nn.ConvTranspose2d(in_channels = network_size[layer+1],
+            multiplier = 1 if layer == self.nlayers-1 else 2
+            G = nn.ConvTranspose2d(in_channels = network_size[layer+1] * multiplier,
                                    out_channels = network_size[layer],
                                    kernel_size = CortexNetBase.KERNEL_SIZE,
                                    stride = CortexNetBase.KERNEL_STRIDE,
@@ -40,7 +42,7 @@ class CortexNetBase(nn.Module):
             setattr(self, 'D_'+str(layer+1), D)
             setattr(self, 'D_'+str(layer+1)+'_BN', D_BN)
             setattr(self, 'G_'+str(layer+1), G)
-            setattr(self, 'G_'+str(layer+1)+'_BN', G_BN)
+            if layer > 0 : setattr(self, 'G_'+str(layer+1)+'_BN', G_BN)
 
     def forward(self, x, state, all_layers = False):
 
@@ -59,20 +61,21 @@ class CortexNetBase(nn.Module):
                 x = torch.cat((x,s), 1)
 
             x = D(x)
-            residuals.append(x)
             x = D_BN(x)
             x = f.relu(x)
+            residuals.append(x)
             outputs['D_'+str(layer+1)] = x
 
         for layer in reversed(range(self.nlayers)):
             G = getattr(self, 'G_'+str(layer+1))
-            G_BN = getattr(self, 'G_'+str(layer+1)+'_BN')
+            if layer < self.nlayers-1:
+                x = torch.cat((x, residuals[layer]), 1)
             x = G(x)
             if layer > 0:
+                G_BN = getattr(self, 'G_'+str(layer+1)+'_BN')
+                x = G_BN(x)
+                x = f.relu(x)
                 state[layer - 1] = x
-                x += residuals[layer - 1]
-            x = G_BN(x)
-            x = f.relu(x)
             outputs['G_'+str(layer+1)] = x
 
         result = (x, state, outputs) if all_layers else (x, state)
@@ -88,15 +91,12 @@ class CortexNetSeg(CortexNetBase):
         super().__init__(network_size)
 
         G_SEG = nn.ConvTranspose2d(in_channels = self.G_1.in_channels,
-                                   out_channels = 1,
+                                   out_channels = 2,
                                    kernel_size = CortexNetBase.KERNEL_SIZE,
                                    stride = CortexNetBase.KERNEL_STRIDE,
                                    padding = CortexNetBase.PADDING,
-                                   output_padding=CortexNetBase.PADDING)
-        G_SEG_BN = nn.BatchNorm2d(1)
-
+                                   output_padding=CortexNetBase.PADDING)        
         setattr(self, 'G_SEG', G_SEG)
-        setattr(self, 'G_SEG_BN', G_SEG_BN)
 
     def forward(self, x, state, all_layers = False):
 
@@ -104,11 +104,8 @@ class CortexNetSeg(CortexNetBase):
 
         # segmentation g block's input is either the second last G or
         # output of D if only one D,G blocks
-        seg_in = outputs['G_2'] if self.nlayers > 1 else outputs['D_1']
+        seg_in = torch.cat((outputs['D_1'], outputs['G_2']), 1) if self.nlayers > 1 else outputs['D_1']
         mask = self.G_SEG(seg_in)
-        mask = self.G_SEG_BN(mask)
-        mask = f.relu(mask)
-        mask = f.sigmoid(mask)
         outputs['G_SEG'] = mask
 
         result = (x, mask, state, outputs) if all_layers else (x, mask, state)

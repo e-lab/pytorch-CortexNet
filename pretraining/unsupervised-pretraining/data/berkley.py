@@ -16,17 +16,20 @@ def collate_fn(args):
         cframes = []
         nframes = []
         segs = []
+        targets = []
         valid = []
         for arg in args:
-            f, n, s, v = arg
+            f, n, s, t, v = arg
             cframes.append(torch.unsqueeze(f[seq], 0))
             nframes.append(torch.unsqueeze(n[seq], 0))
             segs.append(torch.unsqueeze(s[seq], 0))
+            targets.append(torch.unsqueeze(t[seq], 0))
             valid.append(v[seq])
         cframes = torch.cat(cframes, 0)
         nframes = torch.cat(nframes, 0)
         segs = torch.cat(segs, 0)
-        data.append((cframes, nframes, segs, valid))
+        targets = torch.cat(targets, 0)
+        data.append((cframes, nframes, segs, targets, valid))
     return data
 
 class UnsupervisedVideo(data.Dataset):
@@ -102,7 +105,14 @@ class UnsupervisedVideo(data.Dataset):
         cframes = [self.transform(f) for f in cframes]
         nframes = [self.transform(f) for f in nframes]
         segs    = [(self.transform(s)/(100/255)) for s in segs]
-        return cframes, nframes, segs, valid
+        targets = [self.seg2target(s) for s in segs]
+        return cframes, nframes, segs, targets, valid
 
+    def seg2target(self, seg):
+        target = torch.zeros(seg.size()) + 2
+        target[seg < 0.4] = 0
+        target[seg > 0.7] = 1
+        return target
+    
     def __len__(self):
         return len(self.data)
