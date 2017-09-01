@@ -13,11 +13,10 @@ from torchvision import transforms
 
 from model.CortexNet import CortexNetSeg as Model
 from data.berkley import UnsupervisedVideo, collate_fn
+from data.davis import Davis
 
 from visdom import Visdom
 vis = Visdom()
-
-import pdb
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -62,6 +61,7 @@ args = parse_args()
 
 def main():
     # Create data loaders
+    
     transform = transforms.Compose([
         transforms.Scale(int(np.max(args.spatial_size))),
         transforms.CenterCrop(args.spatial_size),
@@ -69,17 +69,31 @@ def main():
     ])
 
     # Load first 80% as training dataset
-    train_dataset = UnsupervisedVideo(args.data_dir, args.seq_length, transform, split=0.8)
+    #train_dataset = UnsupervisedVideo(args.data_dir, args.seq_length, transform, split=0.8)
     # Load last 20% as val dataset
-    val_dataset = UnsupervisedVideo(args.data_dir, args.seq_length, transform, split=-0.2)
+    #val_dataset = UnsupervisedVideo(args.data_dir, args.seq_length, transform, split=-0.2)
 
+    train_fname = Path(args.data_dir) / 'ImageSets/2017/train.txt'
+    val_fname = Path(args.data_dir) / 'ImageSets/2017/val.txt'
+
+    train_dataset = Davis(args.data_dir,
+                          train_fname.as_posix(),
+                          args.seq_length,
+                          transform = transform)
+    #,seq_skip = 1)
+    val_dataset = Davis(args.data_dir,
+                        val_fname.as_posix(),
+                        args.seq_length,
+                        transform = transform)
+                        #,seq_skip = 1)
+    
     train_loader = DataLoader(
         dataset = train_dataset,
         batch_size = args.batch_size,
         sampler = RandomSampler(train_dataset),
         num_workers = args.nworkers,
         pin_memory = args.cuda,
-        collate_fn = collate_fn
+        collate_fn = Davis.collate
     )
 
     val_loader = DataLoader(
@@ -88,15 +102,21 @@ def main():
         #sampler = RandomSampler(val_dataset),
         num_workers = args.nworkers,
         pin_memory = args.cuda,
-        collate_fn = collate_fn
+        collate_fn = Davis.collate
     )
-
+    
     # Load model, define loss and optimizers
     model = Model(args.network_size)
+    '''
     optimizer = optim.SGD(params = model.parameters(),
                           lr = args.lr,
                           momentum = args.momentum,
                           weight_decay = args.weight_decay)
+    '''
+    optimizer = optim.Adam(
+        params = model.parameters(),
+        lr= args.lr
+    )
     gamma, step = 1, 1
     if args.lr_decay:
         gamma, step = args.lr_decay
@@ -134,15 +154,17 @@ def train(model, data_loader, optimizer):
     batch_time = 0
     total_loss = {
         'seg' : 0,
-        'frame': 0
+        'frame': 0,
+        'aux_frame' : 0,
+        'aux_seg' : 0,
     }
 
     model.train()  # set model in train mode
 
-    l1_loss = nn.L1Loss()
+    MSE_loss = nn.MSELoss()
     nll_loss = nn.NLLLoss2d(ignore_index=2)
     if args.cuda:
-        l1_loss = l1_loss.cuda()
+        MSE_loss = MSE_loss.cuda()
         nll_loss = nll_loss.cuda()
 
     for batch_no, data in enumerate(data_loader):
@@ -153,32 +175,33 @@ def train(model, data_loader, optimizer):
 
         # accumulate loss
         loss = 0
-        for cframe, nframe, seg, target, valid in data:
-
+        for i, (cframe, nframe, ctarget, ntarget) in enumerate(data):
+            valid = True
             # predict for every frame in sequence
             if args.cuda:
                 cframe = cframe.cuda(async=True)
                 nframe = nframe.cuda(async=True)
-                target = target.cuda(async=True)
+                ctarget = ctarget.cuda(async=True)
+                ntarget = ntarget.cuda(async=True)
+                
             pred_frame, pred_seg, state = model(V(cframe), state)
-
+            
             # compute loss and accumulate
             pred_seg = f.log_softmax(pred_seg)
-            for j, v in enumerate(valid):
-                if not v: target[j, :] = 2
-            seg_loss = nll_loss(pred_seg, V(target.squeeze(1).long()))
-            #seg_loss = l1_loss(pred_frame, V(nframe))#masked_logistic_loss(pred_seg, V(seg), valid)
-            # set invalid data to 0 loss
-            for i, s in enumerate(valid):
-                if not s:
-                    pred_frame.data[i].copy_(nframe[i])
-            frame_loss = l1_loss(pred_frame, V(nframe))
-            loss += (args.alpha * seg_loss) + (args.beta * frame_loss)
+            seg_loss = nll_loss(pred_seg, V(ntarget.squeeze(1).long()))
+            aux_seg_loss = nll_loss(pred_seg, V(ctarget.squeeze(1).long()))
+            frame_loss = MSE_loss(pred_frame, V(nframe))
+            aux_frame_loss = MSE_loss(pred_frame, V(cframe))
 
             # store loss for future logging
             total_loss['seg'] += seg_loss.data[0]
             total_loss['frame'] += frame_loss.data[0]
+            total_loss['aux_frame'] += aux_frame_loss.data[0]
+            total_loss['aux_seg'] += aux_seg_loss.data[0]
 
+            if i == 0 or not valid: continue
+            loss += (args.alpha * seg_loss) + (args.beta * frame_loss)
+            
         # propogate accumulated loss
         model.zero_grad()
         loss.backward()
@@ -192,11 +215,11 @@ def train(model, data_loader, optimizer):
             cframe = cframe.cpu().numpy()[0]
             nframe = nframe.cpu().numpy()[0]
             pred_frame = pred_frame.data.cpu().numpy()[0]
-            seg = seg.cpu().numpy()[0][0]
-            print(pred_seg.data.max(1)[1].view(pred_seg.size()[0], -1).sum()/pred_seg.size()[0])
+            seg = ntarget.cpu().numpy()[0][0]
+            #print(pred_seg.data.max(1)[1].view(pred_seg.size()[0], -1).sum()/pred_seg.size()[0])
             pred_seg = pred_seg[0].max(0)[1].data.cpu().numpy()# pred_seg.data.cpu().numpy()[0][0]
             smap = np.zeros_like(cframe)
-            smap[0][seg > 0.7] = 1
+            smap[0] = seg == 1
             seg = smap
             smap = np.zeros_like(cframe)
             smap[0] = pred_seg
@@ -225,10 +248,12 @@ def train(model, data_loader, optimizer):
             avg_time = batch_time * 10e3 / args.log_interval
             total_loss['seg'] /= (args.log_interval * args.seq_length)
             total_loss['frame'] /= (args.log_interval * args.seq_length)
+            total_loss['aux_frame'] /= (args.log_interval * args.seq_length)
+            total_loss['aux_seg'] /= (args.log_interval * args.seq_length)
             print('| {:4d}/{:4d} batches| {:7.2f} ms/batch |'
-                  ' {:.2e} seg_loss | {:.2e} frame_loss |'.
+                  ' {:.2e} seg_loss | {:.2e} frame_loss | {:.2e} aux_frame_loss | {:.2e} aux_seg_loss |'.
                   format(batch_no + 1, len(data_loader),
-                         avg_time, total_loss['seg'], total_loss['frame']))
+                         avg_time, total_loss['seg'], total_loss['frame'], total_loss['aux_frame'], total_loss['aux_seg']))
             for k in total_loss: total_loss[k] = 0
             batch_time = 0
 
@@ -243,10 +268,10 @@ def validate(model, data_loader):
 
     model.eval()  # set model in val mode
 
-    l1_loss = nn.L1Loss()
+    MSE_loss = nn.MSELoss()
     nll_loss = nn.NLLLoss2d(ignore_index=2)
     if args.cuda:
-        l1_loss = l1_loss.cuda()
+        MSE_loss = MSE_loss.cuda()
         nll_loss = nll_loss.cuda()
 
     for batch_no, data in enumerate(data_loader):
@@ -257,7 +282,7 @@ def validate(model, data_loader):
 
         # accumulate loss
         loss = 0
-        for cframe, nframe, seg, target, valid in data:
+        for cframe, nframe, _, target in data:
             # predict for every frame in sequence
             if args.cuda:
                 cframe = cframe.cuda(async=True)
@@ -267,14 +292,8 @@ def validate(model, data_loader):
 
             # compute loss and accumulate
             pred_seg = f.log_softmax(pred_seg)
-            for j, v in enumerate(valid):
-                if v: target[j, :] = 2
             seg_loss = nll_loss(pred_seg, V(target.squeeze(1).long()))
-            # set invalid data to 0 loss
-            for i, s in enumerate(valid):
-                if not s:
-                    pred_frame.data[i].copy_(nframe[i])
-            frame_loss = l1_loss(pred_frame, V(nframe))
+            frame_loss = MSE_loss(pred_frame, V(nframe))
             
             # store loss for future logging
             total_loss['seg'] += seg_loss.data[0]

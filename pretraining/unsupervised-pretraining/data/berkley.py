@@ -75,14 +75,18 @@ class UnsupervisedVideo(data.Dataset):
             if len(frames) < 3: continue # not useful for training
             cframes = frames[:-1]
             nframes = frames[1:]
-            segs = segs[1:]
+            csegs = segs[:-1]
+            nsegs = segs[1:]
             for i in range(0, len(cframes), seq_length):
                 start = i
                 end   = i + seq_length
                 if end > len(cframes):
                     start = -seq_length
                     end = len(cframes)
-                data.append((cframes[start:end], nframes[start:end], segs[start:end]))
+                data.append((cframes[start:end],
+                             nframes[start:end],
+                             csegs[start:end],
+                             nsegs[start:end]))
 
         self.data = data
         self.transform = transform
@@ -91,22 +95,26 @@ class UnsupervisedVideo(data.Dataset):
     def __getitem__(self, index):
         # segs are scaled from 0 to 100 in the dataset
         # PIL rescales 0 - 255 by default, so adjust for that
-        cframes, nframes, segs = self.data[index]
+        cframes, nframes, csegs, nsegs = self.data[index]
         cframes = [Image.open(f) for f in cframes]
         nframes = [Image.open(f) for f in nframes]
-        segs   = [Image.open(s) for s in segs]
-        valid  = [True for _ in cframes]
+        csegs   = [Image.open(s) for s in csegs]
+        nsegs   = [Image.open(s) for s in nsegs]
+        valid   = [True for _ in cframes]
         if len(cframes) < self.T:
             cframes += [Image.new(cframes[-1].mode, cframes[-1].size) for _ in range(self.T - len(cframes))]
             nframes += [Image.new(nframes[-1].mode, nframes[-1].size) for _ in range(self.T - len(nframes))]
-            segs    += [Image.new(segs[-1].mode, segs[-1].size) for _ in range(self.T - len(segs))]
+            csegs   += [Image.new(csegs[-1].mode, csegs[-1].size) for _ in range(self.T - len(csegs))]
+            nsegs   += [Image.new(nsegs[-1].mode, nsegs[-1].size) for _ in range(self.T - len(nsegs))]
             valid   += [False for _ in range(self.T - len(valid))]
 
         cframes = [self.transform(f) for f in cframes]
         nframes = [self.transform(f) for f in nframes]
-        segs    = [(self.transform(s)/(100/255)) for s in segs]
-        targets = [self.seg2target(s) for s in segs]
-        return cframes, nframes, segs, targets, valid
+        csegs   = [(self.transform(s)/(100/255)) for s in csegs]
+        nsegs   = [(self.transform(s)/(100/255)) for s in nsegs]
+        ctargets = [self.seg2target(s) for s in csegs]
+        ntargets = [self.seg2target(s) for s in nsegs]
+        return cframes, nframes, ctargets, ntargets, valid
 
     def seg2target(self, seg):
         target = torch.zeros(seg.size()) + 2
